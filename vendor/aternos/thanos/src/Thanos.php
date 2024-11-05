@@ -2,11 +2,9 @@
 
 namespace Aternos\Thanos;
 
-use Aternos\Taskmaster\Taskmaster;
-use Aternos\Thanos\Pattern\ChunkPatternInterface;
-use Aternos\Thanos\Pattern\InhabitedTimePattern;
-use Aternos\Thanos\Task\RegionTask;
-use Aternos\Thanos\Task\RegionTaskFactory;
+use Aternos\Nbt\Tag\CompoundTag;
+use Aternos\Nbt\Tag\LongArrayTag;
+use Aternos\Thanos\RegionDirectory\AnvilRegionDirectory;
 use Aternos\Thanos\World\AnvilWorld;
 use Exception;
 
@@ -18,26 +16,20 @@ use Exception;
  */
 class Thanos
 {
-    protected int $defaultWorkerCount = 8;
-    protected float $defaultTaskTimeout = 0;
-    protected InhabitedTimePattern $inhabitedTimePattern;
 
     /**
-     * @var ChunkPatternInterface[]
+     * @var int
      */
-    protected array $customPatterns = [];
+    protected int $minInhabitedTime = 0;
 
-    public function __construct()
-    {
-        $this->inhabitedTimePattern = new InhabitedTimePattern(0, false);
-    }
+    protected bool $removeUnknownChunks = false;
 
     /**
      * @param int $minInhabitedTime
      */
     public function setMinInhabitedTime(int $minInhabitedTime): void
     {
-        $this->inhabitedTimePattern->setInhabitedTimeThreshold($minInhabitedTime);
+        $this->minInhabitedTime = $minInhabitedTime;
     }
 
     /**
@@ -45,23 +37,7 @@ class Thanos
      */
     public function getMinInhabitedTime(): int
     {
-        return $this->inhabitedTimePattern->getInhabitedTimeThreshold();
-    }
-
-    /**
-     * @param int $defaultWorkerCount
-     */
-    public function setDefaultWorkerCount(int $defaultWorkerCount): void
-    {
-        $this->defaultWorkerCount = $defaultWorkerCount;
-    }
-
-    /**
-     * @return int $defaultWorkerCount
-     */
-    public function getDefaultWorkerCount(): int
-    {
-        return $this->defaultWorkerCount;
+        return $this->minInhabitedTime;
     }
 
     /**
@@ -76,28 +52,61 @@ class Thanos
         $world->copyOtherFiles();
         $removedChunks = 0;
 
-        $taskmaster = new Taskmaster();
-        $taskmaster->autoDetectWorkers($this->defaultWorkerCount);
-        $taskmaster->setDefaultTaskTimeout($this->getDefaultTaskTimeout());
-
-        $pattern = [...$this->getCustomPatterns(), $this->inhabitedTimePattern];
-        $taskmaster->addTaskFactory(new RegionTaskFactory($world, $pattern));
-
-        foreach ($taskmaster->waitAndHandleTasks() as $task) {
-            if (!$task instanceof RegionTask) {
-                continue;
+        foreach ($world->getRegionDirectories() as $regionDirectory) {
+            $forcedChunks = $this->getForceLoadedChunks($regionDirectory);
+            foreach ($regionDirectory as $chunk) {
+                if(in_array([$chunk->getGlobalXPos(), $chunk->getGlobalYPos()], $forcedChunks, true)) {
+                    $chunk->save();
+                    continue;
+                }
+                $time = $chunk->getInhabitedTime();
+                if ($time > $this->minInhabitedTime || ($time === -1 && !$this->removeUnknownChunks)) {
+                    $chunk->save();
+                } else {
+                    $removedChunks++;
+                }
             }
-            if ($task->getError()) {
-                $taskmaster->stop();
-                throw $task->getError();
-            }
-
-            $removedChunks += $task->getResult();
         }
 
-        $taskmaster->stop();
-
         return $removedChunks;
+    }
+
+    /**
+     * Get all force-loaded chunks
+     * If a chunk was manually loaded, it should not be removed
+     *
+     * @param AnvilRegionDirectory $regionDirectory
+     * @return array
+     * @throws Exception
+     */
+    protected function getForceLoadedChunks(AnvilRegionDirectory $regionDirectory): array
+    {
+        $chunksDat = $regionDirectory->readDataFile("chunks.dat");
+        if(!$chunksDat instanceof CompoundTag) {
+            return [];
+        }
+
+        $data = $chunksDat->getCompound("data");
+        if($data === null) {
+            return [];
+        }
+
+        $list = $data->getLongArray("Forced");
+        if($list === null) {
+            return [];
+        }
+
+        $data = $list->getRawValue();
+        $coordinates = [];
+        $currentCoordinate = [];
+        for($i = 0; $i < count($list)*2; $i++) {
+            $currentCoordinate[] = unpack("N", $data, $i*4)[1] << 32 >> 32;
+            if($i % 2 === 1) {
+                $coordinates[] = $currentCoordinate;
+                $currentCoordinate = [];
+            }
+        }
+        return $coordinates;
     }
 
     /**
@@ -105,48 +114,14 @@ class Thanos
      */
     public function setRemoveUnknownChunks(bool $removeUnknownChunks): void
     {
-        $this->inhabitedTimePattern->setRemoveUnknownChunks($removeUnknownChunks);
+        $this->removeUnknownChunks = $removeUnknownChunks;
     }
 
     /**
      * @return bool
      */
-    public function getRemoveUnknownChunks(): bool
+    public function isRemoveUnknownChunks(): bool
     {
-        return $this->inhabitedTimePattern->getRemoveUnknownChunks();
-    }
-
-    /**
-     * @return float
-     */
-    public function getDefaultTaskTimeout(): float
-    {
-        return $this->defaultTaskTimeout;
-    }
-
-    /**
-     * @param float $defaultTaskTimeout
-     * @return void
-     */
-    public function setDefaultTaskTimeout(float $defaultTaskTimeout): void
-    {
-        $this->defaultTaskTimeout = $defaultTaskTimeout;
-    }
-
-    /**
-     * @param ChunkPatternInterface[] $customPatterns
-     * @return void
-     */
-    public function setCustomPatterns(array $customPatterns): void
-    {
-        $this->customPatterns = $customPatterns;
-    }
-
-    /**
-     * @return ChunkPatternInterface[]
-     */
-    public function getCustomPatterns(): array
-    {
-        return $this->customPatterns;
+        return $this->removeUnknownChunks;
     }
 }

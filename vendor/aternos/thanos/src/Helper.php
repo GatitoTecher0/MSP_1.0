@@ -19,29 +19,30 @@ class Helper
      * @param string $src
      * @param string $dst
      */
-    static function copyDirectory(string $src, string $dst): void
-    {
-        if (is_link($src) || is_link($dst)) {
-            return;
-        }
-
+    static function copyDirectory(
+        string $src,
+        string $dst
+    ): void {
         $dir = opendir($src);
-        mkdir($dst, recursive: true);
+        mkdir($dst, 0777, true);
         while (($file = readdir($dir)) !== false) {
-            if ($file === static::CURRENT_DIRECTORY || $file === static::PARENT_DIRECTORY) {
+            if (
+                $file === static::CURRENT_DIRECTORY
+                || $file === static::PARENT_DIRECTORY
+            ) {
                 continue;
             }
 
-            $newSrc = $src . DIRECTORY_SEPARATOR . $file;
-            $newDst = $dst . DIRECTORY_SEPARATOR . $file;
-
             if (is_dir($src . DIRECTORY_SEPARATOR . $file)) {
-                static::copyDirectory($newSrc, $newDst);
+                static::copyDirectory(
+                    $src . DIRECTORY_SEPARATOR . $file,
+                    $dst . DIRECTORY_SEPARATOR . $file
+                );
             } else {
-                if (is_link($newSrc) || is_link($newDst)) {
-                    continue;
-                }
-                copy($newSrc, $newDst);
+                copy(
+                    $src . DIRECTORY_SEPARATOR . $file,
+                    $dst . DIRECTORY_SEPARATOR . $file
+                );
             }
         }
         closedir($dir);
@@ -52,14 +53,10 @@ class Helper
      *
      * @param string $path
      */
-    static function removeDirectory(string $path): void
+    static function removeDirectory(string $path)
     {
         if (substr($path, -1) !== DIRECTORY_SEPARATOR) {
             $path .= DIRECTORY_SEPARATOR;
-        }
-
-        if (!is_dir($path) || is_link($path)) {
-            return;
         }
 
         $directory = dir($path);
@@ -69,7 +66,7 @@ class Helper
             }
 
             $filePath = $path . $file;
-            if (is_dir($filePath) && !is_link($filePath)) {
+            if (is_dir($filePath)) {
                 static::removeDirectory($filePath);
             } else {
                 unlink($filePath);
